@@ -1,68 +1,14 @@
 <?php
   include("php/conn.php");
-
+  require_once('tcpdf/tcpdf.php');
   // Assuming you have a MySQLi connection named $conn
   
-  function generatePdf($clientID, $services, $date, $time, $hours) {
-      $pdfContent = "
-          Billing Information
-          -------------------
-          Client ID: $clientID
-          Services: $services
-          Date: $date
-          Time: $time
-          Hours: $hours
-      ";
   
-      $filename = 'billing_info.pdf';
-  
-      // Open the file for writing
-      if ($file = fopen($filename, 'w')) {
-          // Write content to the file
-          fwrite($file, $pdfContent);
-  
-          // Close the file
-          fclose($file);
-  
-          // Set headers for PDF download
-          header('Content-type: application/pdf');
-          header('Content-Disposition: attachment; filename="' . $filename . '"');
-          header('Content-Length: ' . strlen($pdfContent));
-  
-          // Output the file content
-          readfile($filename);
-  
-          // Optionally, you may delete the file after downloading
-          unlink($filename);
-  
-          exit(); // Ensure that no additional content is sent after the download
-      } else {
-          // Handle file open error
-          echo "Error opening file for writing.";
-      }
-  }
-  
-  // Assuming you have retrieved $clientID, $services, $date, $time, $rate from your form
-  
-  // Perform your transaction and insert data into the database
-
-  
-
-  $result = $conn->query("SELECT date FROM bookingdates");
-  $disabledDates = [];
-  
-  while ($row = $result->fetch_assoc()) {
-      $disabledDates[] = $row['date'];
-  }
   
 
   $sql = "SELECT * FROM sevices";
   $result1 = $conn->query($sql);
   $row1 = $result1->fetch_all(MYSQLI_ASSOC);
-
-  $sql1 = "SELECT time, date, rate FROM bookingdates";
-  $result2 = $conn->query($sql1);
-  $row2 = $result2->fetch_all(MYSQLI_ASSOC);
 
 
   
@@ -74,18 +20,95 @@
     $rate = $_POST["rate"];
     $date = $_POST["date"];
     $time = $_POST["time"];
+    $refNo = $_POST["refNo"];
 
+    $dateFormat = date('Y-m-d', strtotime($_POST['date']));
 
-    $insert = "CALL InsertBooking('$name', '$band', '$contact', $services, '$date', '$time', $rate)";
-    generatePdf($clientID, $services, $date, $time, $rate);
-    if ($conn->query($insert)) {
-      echo "<script>alert('Booking Succesfully!')</script>";
-    } else {
-        echo "Error: " . $conn->error;
+    $sql1 = "SELECT 1
+    FROM
+      bookingdates
+    WHERE `date` = $dateFormat AND
+      TIME_FORMAT(
+        ADDTIME(
+          STR_TO_DATE(`time`, '%h:%i %p'),  -- Convert the original time to TIME
+          STR_TO_DATE(`hours`, '%h:%i %p')   -- Convert the hours to TIME and add to the original time
+        ),
+        '%h:%i %p'
+      ) = '$time' OR `time` = '$time'";
+    $result2 = $conn->query($sql1);
+    $row2 = $result2->fetch_assoc();
+  
+    if($row2 > 0) {
+      echo "<script>alert('Time is not availble!')</script>";
+    }else {
+      $insert = "CALL InsertBooking('$name', '$band', '$contact', $services, '$date', '$time', $rate, '$refNo')";
+      if ($conn->query($insert)) {
+        $sql = "SELECT bookingID FROM bookingDates ORDER BY bookingID DESC LIMIT 1";
+        $getID = $conn->query($sql);
+  
+        if ($getID) {
+            $result = $getID->fetch_assoc();
+            $bookingID = $result['bookingID'];
+            
+            // Assuming $conn is your database connection
+            $insert1 = "CALL InsertIntoBilling('$bookingID', 'Pending', '1')";
+            $conn->query($insert1);
+            
+            generatePdf($conn);
+        } else {
+            // Handle the case where the query fails
+            echo "Error: " . $conn->error;
+        }
+  
+      } else {
+          echo "Error: " . $conn->error;
+      }
+    }
+      
+  }
+
+  function generatePdf($conn) {
+    // Retrieve the data for the invoice using the provided bookingID
+    $sql = "SELECT b.bookingID, c.clientID, c.name, s.serviceName, b.date, b.time, b.hours
+            FROM `bookingdates` b
+            INNER JOIN `client` c ON b.clientID = c.clientID
+            INNER JOIN `sevices` s ON b.servicesID = s.servicesID
+            ORDER BY b.bookingID
+            DESC LIMIT 1";
+    
+    $sqlQuery = mysqli_query($conn, $sql);
+    $result = mysqli_fetch_assoc($sqlQuery);
+
+    $clientID = $result['clientID'];
+    $clientName = $result['name'];
+    $bookingID = $result['bookingID'];
+    $services = $result['serviceName'];
+    $date = $result['date'];
+    $time = $result['time'];
+    $hours = $result['hours'];
+
+    $filename = 'BookingNo'.$bookingID .'.pdf';
+
+    if (file_exists($filename)) {
+        unlink($filename);
     }
 
+    // Use a PDF generation library (e.g., TCPDF) to create the PDF
+    require_once('tcpdf/tcpdf.php');
+    $pdf = new TCPDF();
+    $pdf->AddPage();
+    $pdf->writeHTML("Billing Information");
+    $pdf->writeHTML("-------------------\n");
+    $pdf->writeHTML("Client ID: $clientID\n");
+    $pdf->writeHTML("Client Name: $clientName\n");
+    $pdf->writeHTML("Services: $services\n");
+    $pdf->writeHTML("Date: $date\n");
+    $pdf->writeHTML("Time: $time\n");
+    $pdf->writeHTML("Hours: $hours");
+    $pdf->Output($filename, 'D');
 
-  }
+    return $filename; // Return the filename for further use if needed
+}
 ?>
 
 
@@ -181,31 +204,39 @@
         <input type="date" class="form-control" name="date">
         <br>
         <label>Time</label>
-        <select name="time" id="time" class="form-control">
-          <?php
-          // Loop to generate options for each hour from 8:00 AM to 11:00 PM
-          for ($hour = 8; $hour <= 23; $hour++) {
-            $formattedHour = ($hour > 12) ? $hour - 12 : $hour;
-            $amPm = ($hour >= 12) ? 'PM' : 'AM';
-            $time = sprintf("%02d:00 %s", $formattedHour, $amPm);
-            echo '<option value="' . $time . '">' . $time . '</option>';
-          }
-          ?>
+        <select name="time" class="form-control">
+            <option value="08:00 AM">08:00 AM</option>
+            <option value="09:00 AM">09:00 AM</option>
+            <option value="10:00 AM">10:00 AM</option>
+            <option value="11:00 AM">11:00 AM</option>
+            <option value="12:00 PM">12:00 PM</option>
+            <option value="01:00 PM">01:00 PM</option>
+            <option value="02:00 PM">02:00 PM</option>
+            <option value="03:00 PM">03:00 PM</option>
+            <option value="04:00 PM">04:00 PM</option>
+            <option value="05:00 PM">05:00 PM</option>
+            <option value="06:00 PM">06:00 PM</option>
+            <option value="07:00 PM">07:00 PM</option>
+            <option value="08:00 PM">08:00 PM</option>
+            <option value="09:00 PM">09:00 PM</option>
+            <option value="10:00 PM">10:00 PM</option>
+            <option value="11:00 PM">11:00 PM</option>
         </select>
-        <?php
-        if(isset($_POST['time'])) {
-          $time = $_POST['time'];
-          $date = date('Y-m-d', strtotime($_POST['date']));
-          foreach($row2 as $rows1){
-            if($time == $rows1['time'] && $date == $rows1['date']) {
-              echo "<script>alert('Time is not availble!')</script>";
-            }
-          }
-        }?>
+
+        <br><br>
+        <div class="text-center">
+          <img src="pics/GcashProcess.jpg" alt="" style="width: 25%;">
+          <br><br>
+          <div class="text-center">
+            <label>Reference Number</label>
+            <input name="refNo" class="form-control" required>
+          </div>
+        </div>        
 
         <div class="text-center">
           <button class="btn btn-primary" name="next">Next</button>
         </div>
+      </div>
       </form>
     </section>
     <script
@@ -218,20 +249,7 @@
       integrity="sha384-cuYeSxntonz0PPNlHhBs68uyIAVpIIOZZ5JqeqvYYIcEL727kskC66kF92t6Xl2V"
       crossorigin="anonymous"
     ></script>
-    <script>
-    $(function() {
-        var disabledDates = <?php echo json_encode($disabledDates); ?>;
-
-        // Disable specific dates in the date input
-        $('input[type="date"]').on('input', function() {
-            var selectedDate = $(this).val();
-            if (disabledDates.indexOf(selectedDate) !== -1) {
-                alert("This date is already taken. Please choose another date.");
-                $(this).val('');
-            }
-        });
-    });
-</script>
+    
 <script>
       function onlyNumberKey(evt) {
         var ASCIICode = (evt.which) ? evt.which : evt.keyCode

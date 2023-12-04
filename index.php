@@ -36,6 +36,7 @@
           <li><a href="#pricing" class="nav-link">FAQ'S</a></li>
         
           <li class="highlight"><a class="special" name="get_start" href="book.php">Book Now</a></li>
+          <li><a href="staff.php"><small>Admin</small></a></li>
         </ul>
       </nav>
       <!--   navbar -->
